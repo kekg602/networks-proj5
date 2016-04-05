@@ -3,7 +3,7 @@
 import sys, socket, select, time, json, random
 
 # Respond to a client's message
-def handleClientMessage(msgtype, mid, client_address):
+def handle_client_message(msgtype, mid, client_address):
 	global my_id
 	global sock
 
@@ -11,11 +11,27 @@ def handleClientMessage(msgtype, mid, client_address):
 	msg = {'src': my_id, 'dst': client_address, 'leader': 'FFFF', 'type': 'fail', 'MID': mid}
 	sock.send(json.dumps(msg))
 
+# Get a random number for the election
+# timeout - something between 150 and 300
+def get_election_timeout():
+	i = random.randint(150, 300)
+	return i
+
 # Your ID number
 my_id = sys.argv[1]
 
 # The ID numbers of all the other replicas
 replica_ids = sys.argv[2:]
+
+# The state the replica is in
+# this can be leader, follower or candidate
+# all start as followers
+my_state = "follower"
+
+# Each replica has an election timeout
+# which will be a random number between
+# 150 and 300 ms
+election_timeout = get_election_timeout()
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
@@ -35,7 +51,7 @@ while True:
 		
 		# For now, ignore get() and put() from clients
 		if msg['type'] in ['get', 'put']:
-                        handleClientMessage(msg['type'], msg['MID'], msg['src'])
+                        handle_client_message(msg['type'], msg['MID'], msg['src'])
 		
 		# Handle noop messages. This may be removed from your final implementation
 		elif msg['type'] == 'noop':
