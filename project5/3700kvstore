@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 
-import sys, socket, select, time, json, random
+import sys, socket, select, time, json, random, math
+
+# Amount of time to wait to send
+# a heartbeat
+HEARTBEAT_TIME = .1
 
 # Respond to a client's message
 def handle_client_message(msgtype, mid, client_address):
@@ -30,21 +34,144 @@ def check_election_timeout(current_time):
 	if current_time - last_received_rpc >= election_timeout:
 		begin_election()
 
+def check_send_heartbeat(current_time):
+	global last_sent_heartbeat
+
+	if current_time - last_sent_heartbeat >= HEARTBEAT_TIME:
+		send_heartbeat_rpc()
+
 # Begin an election
 def begin_election():
 	global my_id
+	global state
+	global current_term
+	global num_votes
+	global voted_for
+	global current_leader
+	global last_received_rpc
+
 	print "Election started by " + my_id
 
+	# increment term by 1
+	current_term = current_term + 1
+
+	# transition to candidate state
+	state = "candidate"
+
+	# vote for yourself
+	voted_for = my_id
+
+	# increment number of votes
+	num_votes = 1
+
+	# set current leader to ourselves
+	current_leader = my_id
+
+	# reset for election timeout
+	last_received_rpc = time.time()
+
+	# issue out request rpcs to everyone else
+	send_request_vote_rpcs('FFFF')
+
+# Send out request vote rpcs
+def send_request_vote_rpcs(destination):
+	global sock
+	global my_id
+	global current_leader
+	global current_term
+
+	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'request_vote', 'term': current_term}
+	sock.send(json.dumps(msg))
+
+# Send out the heartbeat rpc
+def send_heartbeat_rpc():
+	global my_id
+	global current_term
+	global sock	
+	global last_sent_heartbeat
+
+	print "SENDING HEARTBEAT " + my_id
+
+	last_sent_heartbeat = time.time()
+
+	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': ''}
+	sock.send(json.dumps(msg))
+
+# If a message of type request_vote is
+# received, handle it here - a replica
+# gets one of these messages if another
+# server is trying to become a leader or
+# if itself is trying to become a leader and 
+# is receiving responses
+def handle_request_vote_messages(msg):
+	global current_term
+	global current_leader
+	global sock
+	global num_votes
+	global majority
+	global voted_for
+	global state
+
+	# if this is a response to our election
+	# we know this if there is an answer key
+	if 'vote_granted' in msg and state == "candidate":
+		print "RECEIVED A VOTE FROM " + msg['src']
+
+		# check the answer, only do something if yes
+		if msg['vote_granted'] == 'yes' and msg['term'] == current_term:
+			num_votes = num_votes + 1			
+			
+			# if we have enough votes to become leader
+			# send out append entry messages to everyone
+			if num_votes >=  majority:
+				print "BECOMING LEADER " + current_leader
+				state = "leader"
+				send_heartbeat_rpc()							
+
+	# if this is a message from a candidate
+	else:
+		# if the candidate's term number is higher
+		# and we have not voted this term, give 
+		# them our vote
+		if msg['term'] >= current_term and voted_for == None:
+			current_term = msg['term']
+			current_leader = msg['leader']
+			voted_for = msg['src']
+			response = {'src': my_id, 'dst': msg['src'], 'leader': msg['leader'], 'type':'request_vote', 'vote_granted':'yes','term': msg['term']}
+		else: #otherwise do not vote for them
+			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type':'request_vote', 'vote_granted':'no', 'term': current_term}
+
+		sock.send(json.dumps(response))		
+	
+def handle_append_entries_messages(msg):
+	global current_term
+	global current_leader
+	global state
+	global my_id
+
+	# if it is a heartbeat from a leader
+	# whose term is at least as big as ours
+	# make sure term/leader/state is up to date
+	if msg['entries'] == '' and msg['term'] >= current_term:
+		print "RECEIVED HEARTBEAT " + my_id
+
+		current_term = msg['term']
+		current_leader = msg['src']
+		state = "follower"
+			
 # Your ID number
 my_id = sys.argv[1]
 
 # The ID numbers of all the other replicas
 replica_ids = sys.argv[2:]
 
+# The number that is considered the majority
+majority = math.ceil((len(replica_ids) + 1) / 2.0)
+
 # The state the replica is in
 # this can be leader, follower or candidate
 # all start as followers
-my_state = "follower"
+state = "follower"
 
 # Each replica has an election timeout
 # which will be a random number between
@@ -56,9 +183,27 @@ election_timeout = get_election_timeout()
 # the current time
 last_received_rpc = time.time()
 
+# Keep track of the last heartbeat we sent
+# this is only relevant when we are the leader
+# initialize to -1, will be reset if/when we
+# become the leader
+last_sent_heartbeat = -1
+
 # Keep track of the replica's term
 # all will start at 0
 current_term = 0
+
+# Candidate who received this replica's
+# vote in the current term
+voted_for = None
+
+# If we are in the candidate state, we want
+# to keep track of how many votes we have gotten
+num_votes = 0
+
+# Current leader, when replicas startup
+# leader is unknown so set to 'FFFF'
+current_leader = 'FFFF'
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
@@ -84,15 +229,25 @@ while True:
 		elif msg['type'] == 'noop':
 			print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
 
-		# For now, if it is a RPC, reset the last received rpc
-		elif msg['type'] == 'request_vote' or msg['type'] == 'append_entries':
+		# Handle a request_vote rpc
+		elif msg['type'] == 'request_vote':
+			handle_request_vote_messages(msg)
+			last_received_rpc = time.time()
+
+		# Handle an append_entries rpc
+		elif msg['type'] == 'append_entries':
+			handle_append_entries_messages(msg)
 			last_received_rpc = time.time()
 		
 	# Do periodic checks
 	clock = time.time()
 
 	# Check if election timeout has occurred
-	check_election_timeout(clock)
+	if not (state == "leader"):
+		check_election_timeout(clock)
+	# Check if we need to send a heartbeat
+	else:
+		check_send_heartbeat(clock)
 
 
 	if clock-last > 2:
