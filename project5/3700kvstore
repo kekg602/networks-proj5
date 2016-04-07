@@ -10,9 +10,15 @@ HEARTBEAT_TIME = .1
 def handle_client_message(msgtype, mid, client_address):
 	global my_id
 	global sock
+	global state
+	global current_leader
 
-	# for now send back a failure message
-	msg = {'src': my_id, 'dst': client_address, 'leader': 'FFFF', 'type': 'fail', 'MID': mid}
+	# If we are not the leader, send a redirect message
+	if not (state == "leader"):
+		msg = {'src': my_id, 'dst': client_address, 'leader': current_leader, 'type': 'redirect', 'MID': mid}
+	else: # for now send back a failure message
+		msg = {'src': my_id, 'dst': client_address, 'leader': 'FFFF', 'type': 'fail', 'MID': mid}
+
 	sock.send(json.dumps(msg))
 
 # Get a random number for the election
@@ -111,14 +117,14 @@ def handle_request_vote_messages(msg):
 	global majority
 	global voted_for
 	global state
+	global my_id
 
 	# if this is a response to our election
-	# we know this if there is an answer key
 	if 'vote_granted' in msg and state == "candidate":
 		print "RECEIVED A VOTE FROM " + msg['src']
 
 		# check the answer, only do something if yes
-		if msg['vote_granted'] == 'yes' and msg['term'] == current_term:
+		if msg['vote_granted'] == 'yes' and msg['term'] == current_term and msg['leader'] == my_id:
 			num_votes = num_votes + 1			
 			
 			# if we have enough votes to become leader
@@ -131,9 +137,8 @@ def handle_request_vote_messages(msg):
 	# if this is a message from a candidate
 	else:
 		# if the candidate's term number is higher
-		# and we have not voted this term, give 
-		# them our vote
-		if msg['term'] >= current_term and voted_for == None:
+		# than ours, or if it is equal and we have not voted
+		if msg['term'] > current_term or (msg['term'] == current_term and voted_for == None):
 			current_term = msg['term']
 			current_leader = msg['leader']
 			voted_for = msg['src']
