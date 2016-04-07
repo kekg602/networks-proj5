@@ -38,6 +38,7 @@ def handle_get_command(msg):
 	key = msg['key']
 	# if the key exists, send okay message
 	if key in state_machine:
+		log.append({'term': current_term, 'command': 'get', 'key': key})
 		value = state_machine[key]
 		response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'ok', 'MID': msg['MID'], 'value': value}
 	# otherwise send a fail message
@@ -61,7 +62,7 @@ def handle_put_command(msg):
 
 	# for now just add to log and state machine
 	# and send success
-	log[key] = value
+	log.append({'term': current_term, 'command': 'put', 'key': key, 'value': value})
 	state_machine[key] = value	
 
 	response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'ok', 'MID': msg['MID']} 
@@ -267,8 +268,9 @@ current_leader = 'FFFF'
 # Keep track of a state machine
 state_machine = {}
 
-# Keep track of a log, make it an ordered dictionary
-log = collections.OrderedDict()
+# Keep track of a log, each entry has a 
+# term number and the command
+log = []
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
