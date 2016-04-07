@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 
-import sys, socket, select, time, json, random, math
+import sys, socket, select, time, json, random, math, collections
 
 # Amount of time to wait to send
 # a heartbeat
-HEARTBEAT_TIME = .1
+HEARTBEAT_TIME = .125
 
 # Respond to a client's message
-def handle_client_message(msgtype, mid, client_address):
+def handle_client_message(msgtype, mid, client_address, msg):
 	global my_id
 	global sock
 	global state
@@ -15,11 +15,58 @@ def handle_client_message(msgtype, mid, client_address):
 
 	# If we are not the leader, send a redirect message
 	if not (state == "leader"):
+		print "SENDING REDIRECT " + current_leader
 		msg = {'src': my_id, 'dst': client_address, 'leader': current_leader, 'type': 'redirect', 'MID': mid}
-	else: # for now send back a failure message
-		msg = {'src': my_id, 'dst': client_address, 'leader': 'FFFF', 'type': 'fail', 'MID': mid}
+		sock.send(json.dumps(msg))
+	# If we are the leader, deal with the user's message
+	elif state == "leader":
+		if msgtype == 'get':
+			handle_get_command(msg)
+		elif msgtype == 'put':
+			handle_put_command(msg)
 
-	sock.send(json.dumps(msg))
+# Handle when a client sends a
+# get request
+def handle_get_command(msg):
+	global state_machine
+	global my_id
+	global current_leader
+	global sock
+
+	#print "RECEIVED GET REQUEST" 
+
+	key = msg['key']
+	# if the key exists, send okay message
+	if key in state_machine:
+		value = state_machine[key]
+		response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'ok', 'MID': msg['MID'], 'value': value}
+	# otherwise send a fail message
+	else:
+		response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'fail', 'MID': msg['MID']}
+		
+	sock.send(json.dumps(response))
+
+# Handle when a client sends a put request
+def handle_put_command(msg):
+	global my_id
+	global current_leader
+	global state_machine
+	global log
+	global sock
+
+	key = msg['key']
+	value = msg['value']
+
+	#print "RECEIVED PUT REQUEST"
+
+	# for now just add to log and state machine
+	# and send success
+	log[key] = value
+	state_machine[key] = value	
+
+	response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'ok', 'MID': msg['MID']} 
+
+	sock.send(json.dumps(response))
 
 # Get a random number for the election
 # timeout - something between 150 and 300 ms
@@ -86,6 +133,8 @@ def send_request_vote_rpcs(destination):
 	global current_leader
 	global current_term
 
+	print "SENDING VOTE REQUEST"
+
 	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'request_vote', 'term': current_term}
 	sock.send(json.dumps(msg))
 
@@ -95,13 +144,16 @@ def send_heartbeat_rpc():
 	global current_term
 	global sock	
 	global last_sent_heartbeat
+	global replica_ids
 
-	print "SENDING HEARTBEAT " + my_id
+	#print "SENDING HEARTBEAT " + my_id
 
 	last_sent_heartbeat = time.time()
 
-	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': ''}
-	sock.send(json.dumps(msg))
+	for r in replica_ids:	
+		#print "SENDING HEARTBEAT"
+		msg = {'src': my_id, 'dst': r, 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': ''}
+		sock.send(json.dumps(msg))
 
 # If a message of type request_vote is
 # received, handle it here - a replica
@@ -139,14 +191,17 @@ def handle_request_vote_messages(msg):
 		# if the candidate's term number is higher
 		# than ours, or if it is equal and we have not voted
 		if msg['term'] > current_term or (msg['term'] == current_term and voted_for == None):
+			print "sending vote yes"
 			current_term = msg['term']
 			current_leader = msg['leader']
 			voted_for = msg['src']
 			response = {'src': my_id, 'dst': msg['src'], 'leader': msg['leader'], 'type':'request_vote', 'vote_granted':'yes','term': msg['term']}
-		else: #otherwise do not vote for them
-			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type':'request_vote', 'vote_granted':'no', 'term': current_term}
+			sock.send(json.dumps(response))
+		#elif not (current_leader == msg['leader']): #otherwise do not vote for them
+		#	print "sending vote no"
+		#	response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type':'request_vote', 'vote_granted':'no', 'term': current_term}
 
-		sock.send(json.dumps(response))		
+		#sock.send(json.dumps(response))		
 	
 def handle_append_entries_messages(msg):
 	global current_term
@@ -158,8 +213,7 @@ def handle_append_entries_messages(msg):
 	# whose term is at least as big as ours
 	# make sure term/leader/state is up to date
 	if msg['entries'] == '' and msg['term'] >= current_term:
-		print "RECEIVED HEARTBEAT " + my_id
-
+		#print "RECEIVED HEARTBEAT " + my_id
 		current_term = msg['term']
 		current_leader = msg['src']
 		state = "follower"
@@ -210,12 +264,18 @@ num_votes = 0
 # leader is unknown so set to 'FFFF'
 current_leader = 'FFFF'
 
+# Keep track of a state machine
+state_machine = {}
+
+# Keep track of a log, make it an ordered dictionary
+log = collections.OrderedDict()
+
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 sock.connect(my_id)
 
-last = 0
+#last = 0
 
 while True:
 	ready = select.select([sock], [], [], 0.1)[0]
@@ -228,11 +288,11 @@ while True:
 		
 		# For now, send back fail message to get and put calls
 		if msg['type'] in ['get', 'put']:
-                        handle_client_message(msg['type'], msg['MID'], msg['src'])
+                        handle_client_message(msg['type'], msg['MID'], msg['src'], msg)
 		
 		# Handle noop messages. This may be removed from your final implementation
-		elif msg['type'] == 'noop':
-			print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
+		#elif msg['type'] == 'noop':
+		#	print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
 
 		# Handle a request_vote rpc
 		elif msg['type'] == 'request_vote':
@@ -255,10 +315,10 @@ while True:
 		check_send_heartbeat(clock)
 
 
-	if clock-last > 2:
+	#if clock-last > 2:
 		# Send a no-op message to a random peer every two seconds, just for fun
 		# You definitely want to remove this from your implementation
-		msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
-		sock.send(json.dumps(msg))
+		#msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+		#sock.send(json.dumps(msg))
 		#print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
-		last = clock
+		#last = clock
