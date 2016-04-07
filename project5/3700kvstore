@@ -35,15 +35,17 @@ def handle_get_command(msg):
 
 	#print "RECEIVED GET REQUEST" 
 
+	# failure case?
+
 	key = msg['key']
 	# if the key exists, send okay message
 	if key in state_machine:
 		log.append({'term': current_term, 'command': 'get', 'key': key})
 		value = state_machine[key]
 		response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'ok', 'MID': msg['MID'], 'value': value}
-	# otherwise send a fail message
+	# otherwise send a message with a blank value
 	else:
-		response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'fail', 'MID': msg['MID']}
+		response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'ok', 'MID': msg['MID'], 'value': ''}
 		
 	sock.send(json.dumps(response))
 
