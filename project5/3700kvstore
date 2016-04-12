@@ -85,7 +85,7 @@ def initialize_follower_index():
 		follower_next_index[r] = index + 1
 
 # Get a random number for the election
-# timeout - something between 150 and 300 ms
+# timeout
 def get_election_timeout():
 	i = random.randint(150, 300)
 	
@@ -164,11 +164,10 @@ def send_append_entries_rpc(entry, entry_index):
 	global sock
 	global log
 	global commit_index
+	global last_sent_rpc
 
 	if not entry == '':
 		print "SENDING APPEND ENTRY"
-
-	last_sent_rpc = time.time()
 	
 	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index}
 
@@ -180,6 +179,9 @@ def send_append_entries_rpc(entry, entry_index):
                 last_term = log[last_index]['term']
 		msg['last_index'] = last_index
 		msg['last_term'] = last_term
+
+	# update
+	last_sent_rpc = time.time()
 
 	sock.send(json.dumps(msg))
 
