@@ -41,6 +41,7 @@ def handle_client_message(msgtype, mid, client_address, msg):
 # Handle a general command
 def handle_queue_command():
 	global command_queue
+	global log
 
 	# Make sure there are items in the queue
 	if len(command_queue) >= 1:
@@ -56,7 +57,7 @@ def handle_queue_command():
 		for l in log:
 			# If we have seen it, remove it from queue
 			# and go to next command
-			if l['MID'] == entry['MID']:
+			if 'MID' in l and l['MID'] == entry['MID']:
 				print "ALREADY HAVE THIS IN LOG"
 				del command_queue[0]	
 				handle_queue_command()
@@ -292,13 +293,9 @@ def handle_append_entries_messages(msg):
 			follower = msg['src']
 			follower_next_index[follower] = follower_next_index[follower] + 1
 			
-			# check if we need to send more entries
-			# to the replica to make them up to date
-			# by comparing the follower's next index to our commit index
-			if not follower_next_index[follower] - 1 == commit_index + 1:
-				print "NOT UP TO DATE, OR WE ALREADY COMMITTED THIS ENTRY AND DO NOT NEED MORE RESPONSES ABOUT IT"
-				
-			else:
+			# check if we have already committed this on our state
+			# machine or not, if we have then ignore it
+			if follower_next_index[follower] - 1 == commit_index + 1:
 				# add one to the counter and see if the
 				# majority has added it to their logs
 				num_replica_logs = num_replica_logs + 1
