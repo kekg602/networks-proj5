@@ -296,7 +296,7 @@ def handle_append_entries_messages(msg):
 			# to the replica to make them up to date
 			# by comparing the follower's next index to our commit index
 			if not follower_next_index[follower] - 1 == commit_index + 1:
-				print "NOT UP TO DATE"
+				print "NOT UP TO DATE, OR WE ALREADY COMMITTED THIS ENTRY AND DO NOT NEED MORE RESPONSES ABOUT IT"
 				
 			else:
 				# add one to the counter and see if the
