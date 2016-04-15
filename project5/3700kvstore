@@ -106,9 +106,10 @@ def check_election_timeout(current_time):
 # Check to see if the rpc timeout has occurred
 def check_send_heartbeat(current_time):
 	global last_sent_rpc
+	global log
 
 	if current_time - last_sent_rpc >= HEARTBEAT_TIME:
-		send_append_entries_rpc('', -1)
+		send_append_entries_rpc('', len(log))
 
 # Begin an election
 def begin_election():
@@ -166,23 +167,16 @@ def send_append_entries_rpc(entry, entry_index):
 	global commit_index
 	global last_sent_rpc
 
-	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index}
-
-	# Get the index and term of the entry
-       # immediately proceeding the new one
-       # if we are sending data
 	if not entry == '':
 		print "SENDING APPEND ENTRY"
-
-		last_index = entry_index - 1
-
-		if (entry_index - 1 > 0):
-        		last_term = log[last_index]['term']
-		else:
-			last_term = 0
-			
-		msg['last_index'] = last_index
-		msg['last_term'] = last_term
+	
+	last_index = entry_index - 1
+	if (entry_index - 1 > 0):
+		last_term = log[last_index]['term']
+	else:
+		last_term = 0
+	
+	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index, 'last_index': last_index, 'last_term': last_term}
 
 	# update
 	last_sent_rpc = time.time()
@@ -204,6 +198,7 @@ def handle_request_vote_messages(msg):
 	global voted_for
 	global state
 	global my_id
+	global log
 
 	# if this is a response to our election
 	if 'vote_granted' in msg and state == "candidate":
@@ -220,7 +215,7 @@ def handle_request_vote_messages(msg):
 				print "BECOMING LEADER " + current_leader
 				state = "leader"
 				initialize_follower_index()
-				send_append_entries_rpc('', -1)							
+				send_append_entries_rpc('', len(log))							
 	# if this is a message from a candidate
 	else:
 		# if the candidate's term number is higher
@@ -255,30 +250,26 @@ def handle_append_entries_messages(msg):
 			last_term = log[-1]['term']
 		else:
 			last_term = 0			
-
-		#if 'last_index' in msg and 'last_term' in msg:
-		#	print str(msg['last_index']) + " " + str(last_index) + " " + str(msg['last_term']) + " " + str(last_term)
 		
 		# if it is a heartbeat from a leader
 		# make sure term/leader/state is up to date
-		# and check if we need to commit to state machine
 		if msg['entries'] == '': 
 			current_term = msg['term']
 			current_leader = msg['src']
 			state = "follower"
-			
-			check_to_commit(leader_commit)
 
 		# check if our last term/last index match up with the leader's
-		elif (msg['last_index'] == last_index and msg['last_term'] == last_term):
-			print "APPEND ENTRY TO FOLLOWER LOG"
-				
-			# append entry to log
-			log.append(msg['entries'])
-				
-			# send back message of success
-			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
-			sock.send(json.dumps(response))
+		if (msg['last_index'] == last_index and msg['last_term'] == last_term):
+			# if we need to add something to the log
+			if not msg['entries'] == '':
+				print "APPEND ENTRY TO FOLLOWER LOG"
+					
+				# append entry to log
+				log.append(msg['entries'])
+					
+				# send back message of success
+				response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
+				sock.send(json.dumps(response))
 			
 			# check if we need to commit anything
 			# to state machine
@@ -286,10 +277,11 @@ def handle_append_entries_messages(msg):
 			
 		# If they do not match up with our log, send back
 		# an error message that includes our last term and index
-		else: 
-			print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+		else:
+			temp = "deal with later" 
+			#print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
 
-			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'fail', 'last_index': last_index, 'last_term': last_term}
+			#response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'fail', 'last_index': last_index, 'last_term': last_term}
 				
 	# if we are the leader and this is a
 	# response to an append_entries we sent
@@ -317,30 +309,28 @@ def handle_append_entries_messages(msg):
 				if num_replica_logs >= majority:
 					print "ENTRY ADDED TO MAJORITY OF FOLLOWER LOGS"
 					apply_command()
-		# if the entry was not successfully
-		# added to the replica's log
-		#elif msg['status'] == 'fail':
-			# update the follower's log to match
-			# our log
 			
 # If we are a follower, check to see if we
 # should commit anything to our state machine
 def check_to_commit(leader_commit_index):
-	global current_leader
-	global current_term
 	global log
 	global commit_index
 	
-	#if leader_commit_index > commit_index:
-	#	print "SHOULD COMMIT HERE"
+	while leader_commit_index > commit_index:
+		if len(log) > commit_index:
+			print "COMMITTING TO FOLLOWER STATE MACHINE"
+			apply_command()
+		else:
+			break;
 		
-# Apply the command to the leader's state
+# Apply the command to a replica's state machine
 # machine and respond to the client
 def apply_command():
 	global commit_index			
 	global log
 	global command_queue
 	global num_replica_logs
+	global state
 
 	print "APPLYING COMMAND TO STATE MACHINE"
 	
@@ -355,15 +345,21 @@ def apply_command():
 		handle_get_command(command)
 	elif command['type'] == 'put':
 		handle_put_command(command)
+
+	global state_machine
+	global my_id
+	print "replica state_machine " + str(my_id) + " " + str(len(state_machine))
 	
-	# Remove this from the queue
-	del command_queue[0]	
+	# Only need to do the following steps
+	# if we are the leader
+	if state == "leader":
+		# Remove this from the queue
+		del command_queue[0]	
 
-	num_replica_logs = 0
+		num_replica_logs = 0
 
-	# Handle the next element in the queue
-	handle_queue_command()
-
+		# Handle the next element in the queue
+		handle_queue_command()
 
 # Handle when a client sends a
 # get request
@@ -372,20 +368,24 @@ def handle_get_command(command):
 	global my_id
 	global current_leader
 	global sock
+	global state
 
-	key = command['key']
-	
-	# if the key exists, send okay message to client
-	if key in state_machine:
-		print "GET SUCCESS"
-
-		value = state_machine[key]
-		response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID'], 'value': value}
-	# otherwise send a message with a blank value
-	else:
-		response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID'], 'value': ''}
+	# For gets, only need to do anything if
+	# we are the leader
+	if state == "leader":
+		key = command['key']
 		
-	sock.send(json.dumps(response))
+		# if the key exists, send okay message to client
+		if key in state_machine:
+			print "GET SUCCESS"
+	
+			value = state_machine[key]
+			response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID'], 'value': value}
+		# otherwise send a message with a blank value
+		else:
+			response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID'], 'value': ''}
+			
+		sock.send(json.dumps(response))
 
 # Handle when a client sends a put request
 def handle_put_command(command):
@@ -393,19 +393,24 @@ def handle_put_command(command):
 	global current_leader
 	global state_machine
 	global sock
+	global state
 
 	key = command['key']
 	value = command['value']
 
-	# add to state machine and send success
-	if not key == None and not value == None:
-		print "PUT SUCCESS"
-		state_machine[key] = value	
-		response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID']}
-	else:
-		response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'fail', 'MID': command['MID']} 
-
-	sock.send(json.dumps(response))
+	if state == "leader":
+		# add to state machine and send success
+		if not key == None and not value == None:
+			print "PUT SUCCESS"
+			state_machine[key] = value	
+			response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID']}
+		else:
+			response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'fail', 'MID': command['MID']} 
+	
+		sock.send(json.dumps(response))
+	elif state == "follower":
+		if not key == None and not value == None:
+			state_machine[key] = value
 			
 # Your ID number
 my_id = sys.argv[1]
