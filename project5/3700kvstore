@@ -68,7 +68,7 @@ def handle_queue_command():
 	
 		# Send append entries rpcs to all other
 		# replicas in parallel
-		send_append_entries_rpc(entry, log.index(log[-1]))
+		send_append_entries_rpc(entry, len(log))
 
 # The leader initializes the next index
 # for each follower to be its own last
@@ -78,8 +78,8 @@ def initialize_follower_index():
 	global log
 	global replica_ids
 
-	# Get the index of the last entry in the log
-	index = log.index(log[-1])
+	# Get the index of of the last entry in the log
+	index = len(log)
 
 	for r in replica_ids:
 		follower_next_index[r] = index + 1
@@ -166,17 +166,21 @@ def send_append_entries_rpc(entry, entry_index):
 	global commit_index
 	global last_sent_rpc
 
-	if not entry == '':
-		print "SENDING APPEND ENTRY"
-	
 	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index}
 
 	# Get the index and term of the entry
-        # immediately proceeding the new one
-        # if we are sending data
-        if not entry == '':
-                last_index = entry_index - 1
-                last_term = log[last_index]['term']
+       # immediately proceeding the new one
+       # if we are sending data
+	if not entry == '':
+		print "SENDING APPEND ENTRY"
+
+		last_index = entry_index - 1
+
+		if (entry_index - 1 > 0):
+        		last_term = log[last_index]['term']
+		else:
+			last_term = 0
+			
 		msg['last_index'] = last_index
 		msg['last_term'] = last_term
 
@@ -245,11 +249,15 @@ def handle_append_entries_messages(msg):
 		leader_commit = msg['commit_index']
 		
 		# Get our last index and term
-		last_index = log.index(log[-1])
-		last_term = log[-1]['term']			
+		last_index = len(log)
+		
+		if (len(log) > 0):
+			last_term = log[-1]['term']
+		else:
+			last_term = 0			
 
-		if 'last_index' in msg and 'last_term' in msg:
-			print str(msg['last_index']) + " " + str(last_index) + " " + str(msg['last_term']) + " " + str(last_term)
+		#if 'last_index' in msg and 'last_term' in msg:
+		#	print str(msg['last_index']) + " " + str(last_index) + " " + str(msg['last_term']) + " " + str(last_term)
 		
 		# if it is a heartbeat from a leader
 		# make sure term/leader/state is up to date
@@ -336,11 +344,11 @@ def apply_command():
 
 	print "APPLYING COMMAND TO STATE MACHINE"
 	
-	# Increment the commit index of leader
-	commit_index = commit_index + 1
-
 	# Get the correct log entry
 	command = log[commit_index]
+	
+	# Increment the commit index of leader
+	commit_index = commit_index + 1
 	
 	# Check the type of command and handle it accordingly
 	if command['type'] == 'get':
@@ -451,10 +459,6 @@ state_machine = {}
 # Keep track of a log, each entry has a 
 # term number and the command
 log = []
-
-# We want the log to start at index 1, so
-# add a placeholder for the beginning of log
-log.append({'term': None})
 
 # Keep track of a queue of client commands
 command_queue = []
