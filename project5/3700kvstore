@@ -25,7 +25,7 @@ def handle_client_message(msgtype, mid, client_address, msg):
 		print "Add entry to queue"
 
 		# Add the entry to the queue
-		entry = {'client': client_address, 'type': msgtype, 'key': msg['key'], 'term': current_term, 'MID': mid}
+		entry = {'client': client_address, 'type': msgtype, 'key': msg['key'], 'term': current_term, 'MID': mid, 'leader': current_leader}
 
 		# Add value to entry if it is in the message
 		if 'value' in msg:
@@ -257,19 +257,22 @@ def handle_append_entries_messages(msg):
 			current_term = msg['term']
 			current_leader = msg['src']
 			state = "follower"
+			
+			# check if we need to commit anything
+			# to state machine
+			check_to_commit(leader_commit)
 
 		# check if our last term/last index match up with the leader's
-		if (msg['last_index'] == last_index and msg['last_term'] == last_term):
+		elif (msg['last_index'] == last_index and msg['last_term'] == last_term):
 			# if we need to add something to the log
-			if not msg['entries'] == '':
-				print "APPEND ENTRY TO FOLLOWER LOG"
+			print "APPEND ENTRY TO FOLLOWER LOG"
 					
-				# append entry to log
-				log.append(msg['entries'])
+			# append entry to log
+			log.append(msg['entries'])
 					
-				# send back message of success
-				response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
-				sock.send(json.dumps(response))
+			# send back message of success
+			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
+			sock.send(json.dumps(response))
 			
 			# check if we need to commit anything
 			# to state machine
@@ -278,7 +281,7 @@ def handle_append_entries_messages(msg):
 		# If they do not match up with our log, send back
 		# an error message that includes our last term and index
 		else:
-			temp = "deal with later" 
+			print "deal with later" 
 			#print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
 
 			#response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'fail', 'last_index': last_index, 'last_term': last_term}
@@ -315,9 +318,11 @@ def handle_append_entries_messages(msg):
 def check_to_commit(leader_commit_index):
 	global log
 	global commit_index
+	global current_term
+	global current_leader
 	
 	while leader_commit_index > commit_index:
-		if len(log) > commit_index:
+		if len(log) > commit_index and log[commit_index]['term'] == current_term and log[commit_index]['leader'] == current_leader:
 			print "COMMITTING TO FOLLOWER STATE MACHINE"
 			apply_command()
 		else:
