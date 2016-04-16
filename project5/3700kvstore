@@ -179,8 +179,8 @@ def send_append_entries_rpc(entry_index, destination):
 	else:
 		entry = log[entry_index - 1]
 
-	if not entry == '':
-		print "SENDING APPEND ENTRY"
+	#if not entry == '':
+		#print "SENDING APPEND ENTRY"
 	
 	# Get the last index and term
 	last_index = entry_index - 1
@@ -253,8 +253,27 @@ def handle_append_entries_messages(msg):
 	global log
 	global follower_next_index
 
+	# If this messsage has a higher term than ours
+	# or the same term but a different leader
+	# then make sure our information matches with theirs
+	# because highest term wins and also only a replica
+	# who has gotten the majority of votes and is the real
+	# leader can send append entries rpcs
+	if msg['term'] > current_term or (msg['term'] == current_term and not msg['leader'] == current_leader):
+		current_leader = msg['leader']
+		current_term = msg['term']
+		
+		if not current_leader == my_id:
+			state = 'follower'
+		else:
+			state = 'leader'
+		
+	# ** Now that we have the correct term and leader sorted
+	# ** out we may begin dealing with the information from
+	# ** the rpc 
+	
 	# If it is a message from the leader
-	if 'entries' in msg and msg['term'] >= current_term and msg['src'] == current_leader:
+	if 'entries' in msg and msg['term'] == current_term and msg['src'] == current_leader:
 		# Get the leader's last commit
 		leader_commit = msg['commit_index']
 		
@@ -266,21 +285,16 @@ def handle_append_entries_messages(msg):
 		else:
 			last_term = 0			
 		
-		# if it is a heartbeat from a leader
-		# make sure term/leader/state is up to date
-		if msg['entries'] == '': 
-			current_term = msg['term']
-			current_leader = msg['src']
-			state = "follower"
-			
-			# check if we need to commit anything
-			# to state machine
+		# if it is a heartbeat from the leader check if
+		# we need to commit anything to state machine 
+		if msg['entries'] == '': 	
 			check_to_commit(leader_commit)
 
-		# check if our last term/last index match up with the leader's
+		# if entries it not empty, check if our last term/last 
+		# index match up with the leader's
 		elif (msg['last_index'] == last_index and msg['last_term'] == last_term):
 			# if we need to add something to the log
-			print "APPEND ENTRY TO FOLLOWER LOG"
+			#print "APPEND ENTRY TO FOLLOWER LOG"
 					
 			# append entry to log
 			log.append(msg['entries'])
@@ -295,18 +309,18 @@ def handle_append_entries_messages(msg):
 			
 		# If they do not match up with our log, send back
 		# an error message that includes our last term and index
-		else:
-			print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+		#else:
+		#	print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
 			
 			# If our last index is greater than or equal to 
 			# the last index sent from the leader, remove the
 			# unmatching entry/entries
-			while len(log) >= msg['last_index']:
-				print "REMOVING ENTRIES FROM FOLLOWER LOG"
-				del log[-1]
+		#	while len(log) >= msg['last_index']:
+		#		print "REMOVING ENTRIES FROM FOLLOWER LOG"
+		#		del log[-1]
 			
-			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure'}
-			sock.send(json.dumps(response))				
+		#	response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure'}
+		#	sock.send(json.dumps(response))				
 
 	# if we are the leader and this is a
 	# response to an append_entries we sent
@@ -314,11 +328,17 @@ def handle_append_entries_messages(msg):
 		# if the entry we are dealing with now
 		# was successfully added to the replica's log
 		if msg['status'] == 'success':
-			print "ENTRY SUCCCESSFULLY ADDED TO FOLLOWER LOG"
+			#print "ENTRY SUCCCESSFULLY ADDED TO FOLLOWER LOG"
 
 			# update the next index of the follower
 			follower = msg['src']
 			follower_next_index[follower] = follower_next_index[follower] + 1
+
+			# Check to see if we need to send more append entries
+			# messages to the follower to catch them up to our log
+			#if follower_next_index[follower] < len(log) + 1:
+			#	print "NEED TO SEND MORE TO FOLLOWER"
+			#	send_append_entries_rpc(follower_next_index[follower], follower)
 			
 			# check if we have already committed this on our state
 			# machine or not, if we have then ignore it
@@ -332,17 +352,17 @@ def handle_append_entries_messages(msg):
 				# and make sure that all other replicas
 				# are up to date
 				if num_replica_logs >= majority:
-					print "ENTRY ADDED TO MAJORITY OF FOLLOWER LOGS"
+					#print "ENTRY ADDED TO MAJORITY OF FOLLOWER LOGS"
 					apply_command()
-		elif msg['status'] == 'consistency_failure':
-			# Get the follower and decrement their next index
-			follower = msg['src']
-			follower_next_index[follower] = follower_next_index[follower] - 1
+		#elif msg['status'] == 'consistency_failure':
+		#	# Get the follower and decrement their next index
+		#	follower = msg['src']
+		#	follower_next_index[follower] = follower_next_index[follower] - 1
 								
 			# Send an append entry with the appropriate entry attached
-			print "SENDING APPEND ENTRY TO RESOLVE FAILURE"
-			send_append_entries_rpc(follower_next_index[follower], follower)
-			
+		#	print "SENDING APPEND ENTRY TO RESOLVE FAILURE"
+		#	send_append_entries_rpc(follower_next_index[follower], follower)		
+		
 # If we are a follower, check to see if we
 # should commit anything to our state machine
 def check_to_commit(leader_commit_index):
@@ -353,7 +373,7 @@ def check_to_commit(leader_commit_index):
 	
 	while leader_commit_index > commit_index:
 		if len(log) > commit_index and log[commit_index]['term'] == current_term and log[commit_index]['leader'] == current_leader:
-			print "COMMITTING TO FOLLOWER STATE MACHINE"
+			#print "COMMITTING TO FOLLOWER STATE MACHINE"
 			apply_command()
 		else:
 			break;
@@ -367,7 +387,7 @@ def apply_command():
 	global num_replica_logs
 	global state
 
-	print "APPLYING COMMAND TO STATE MACHINE"
+	#print "APPLYING COMMAND TO STATE MACHINE"
 	
 	# Get the correct log entry
 	command = log[commit_index]
@@ -383,7 +403,7 @@ def apply_command():
 
 	global state_machine
 	global my_id
-	print "replica state_machine " + str(my_id) + " " + str(len(state_machine))
+	#print "replica state_machine " + str(my_id) + " " + str(len(state_machine))
 	
 	# Only need to do the following steps
 	# if we are the leader
@@ -412,7 +432,7 @@ def handle_get_command(command):
 		
 		# if the key exists, send okay message to client
 		if key in state_machine:
-			print "GET SUCCESS"
+			#print "GET SUCCESS"
 	
 			value = state_machine[key]
 			response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID'], 'value': value}
@@ -436,7 +456,7 @@ def handle_put_command(command):
 	if state == "leader":
 		# add to state machine and send success
 		if not key == None and not value == None:
-			print "PUT SUCCESS"
+			#print "PUT SUCCESS"
 			state_machine[key] = value	
 			response = {'src': my_id, 'dst': command['client'], 'leader': current_leader, 'type': 'ok', 'MID': command['MID']}
 		else:
