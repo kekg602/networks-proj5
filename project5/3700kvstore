@@ -17,12 +17,12 @@ def handle_client_message(msgtype, mid, client_address, msg):
 
 	# If we are not the leader, send a redirect message
 	if not (state == "leader"):
-		print "SENDING REDIRECT " + current_leader
+		#print "SENDING REDIRECT " + current_leader
 		msg = {'src': my_id, 'dst': client_address, 'leader': current_leader, 'type': 'redirect', 'MID': mid}
 		sock.send(json.dumps(msg))
 	# If we are the leader, deal with the user's message
 	elif state == "leader":
-		print "Add entry to queue"
+		#print "Add entry to queue"
 
 		# Add the entry to the queue
 		entry = {'client': client_address, 'type': msgtype, 'key': msg['key'], 'term': current_term, 'MID': mid, 'leader': current_leader}
@@ -63,7 +63,7 @@ def handle_queue_command():
 				handle_queue_command()
 				return
 
-		print "ADD ENTRY TO LEADER LOG"
+		#print "ADD ENTRY TO LEADER LOG"
 		log.append(entry)
 	
 		# Send append entries rpcs to all other
@@ -309,18 +309,18 @@ def handle_append_entries_messages(msg):
 			
 		# If they do not match up with our log, send back
 		# an error message that includes our last term and index
-		#else:
-		#	print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+		else:
+			print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
 			
 			# If our last index is greater than or equal to 
 			# the last index sent from the leader, remove the
 			# unmatching entry/entries
-		#	while len(log) >= msg['last_index']:
-		#		print "REMOVING ENTRIES FROM FOLLOWER LOG"
-		#		del log[-1]
+			while len(log) >= msg['last_index']:
+				print "REMOVING ENTRIES FROM FOLLOWER LOG"
+				del log[-1]
 			
-		#	response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure'}
-		#	sock.send(json.dumps(response))				
+			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure'}
+			sock.send(json.dumps(response))				
 
 	# if we are the leader and this is a
 	# response to an append_entries we sent
@@ -336,9 +336,10 @@ def handle_append_entries_messages(msg):
 
 			# Check to see if we need to send more append entries
 			# messages to the follower to catch them up to our log
-			#if follower_next_index[follower] < len(log) + 1:
-			#	print "NEED TO SEND MORE TO FOLLOWER"
-			#	send_append_entries_rpc(follower_next_index[follower], follower)
+			#print str(follower_next_index[follower]) + " " + str(commit_index)
+			if follower_next_index[follower] < (commit_index + 1):
+				print "NEED TO SEND MORE TO FOLLOWER"
+				send_append_entries_rpc(follower_next_index[follower], follower)
 			
 			# check if we have already committed this on our state
 			# machine or not, if we have then ignore it
@@ -354,14 +355,14 @@ def handle_append_entries_messages(msg):
 				if num_replica_logs >= majority:
 					#print "ENTRY ADDED TO MAJORITY OF FOLLOWER LOGS"
 					apply_command()
-		#elif msg['status'] == 'consistency_failure':
-		#	# Get the follower and decrement their next index
-		#	follower = msg['src']
-		#	follower_next_index[follower] = follower_next_index[follower] - 1
+		elif msg['status'] == 'consistency_failure':
+			# Get the follower and decrement their next index
+			follower = msg['src']
+			follower_next_index[follower] = follower_next_index[follower] - 1
 								
 			# Send an append entry with the appropriate entry attached
-		#	print "SENDING APPEND ENTRY TO RESOLVE FAILURE"
-		#	send_append_entries_rpc(follower_next_index[follower], follower)		
+			print "SENDING APPEND ENTRY TO RESOLVE FAILURE"
+			send_append_entries_rpc(follower_next_index[follower], follower)		
 		
 # If we are a follower, check to see if we
 # should commit anything to our state machine
