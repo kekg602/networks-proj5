@@ -68,7 +68,7 @@ def handle_queue_command():
 	
 		# Send append entries rpcs to all other
 		# replicas in parallel
-		send_append_entries_rpc(entry, len(log))
+		send_append_entries_rpc(len(log), 'FFFF')
 
 # The leader initializes the next index
 # for each follower to be its own last
@@ -109,7 +109,7 @@ def check_send_heartbeat(current_time):
 	global log
 
 	if current_time - last_sent_rpc >= HEARTBEAT_TIME:
-		send_append_entries_rpc('', len(log))
+		send_append_entries_rpc(-1, 'FFFF')
 
 # Begin an election
 def begin_election():
@@ -159,13 +159,18 @@ def send_request_vote_rpcs(destination):
 	sock.send(json.dumps(msg))
 
 # Send out append entries rpc
-def send_append_entries_rpc(entry, entry_index):
+def send_append_entries_rpc(entry_index, destination):
 	global my_id
 	global current_term
 	global sock
 	global log
 	global commit_index
 	global last_sent_rpc
+
+	if entry_index == -1:
+		entry = ''
+	else:
+		entry = log[entry_index - 1]
 
 	if not entry == '':
 		print "SENDING APPEND ENTRY"
@@ -176,7 +181,7 @@ def send_append_entries_rpc(entry, entry_index):
 	else:
 		last_term = 0
 	
-	msg = {'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index, 'last_index': last_index, 'last_term': last_term}
+	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index, 'last_index': last_index, 'last_term': last_term}
 
 	# update
 	last_sent_rpc = time.time()
@@ -215,7 +220,7 @@ def handle_request_vote_messages(msg):
 				print "BECOMING LEADER " + current_leader
 				state = "leader"
 				initialize_follower_index()
-				send_append_entries_rpc('', len(log))							
+				send_append_entries_rpc(-1, 'FFFF')							
 	# if this is a message from a candidate
 	else:
 		# if the candidate's term number is higher
@@ -525,6 +530,5 @@ while True:
 	# Check if we need to send a heartbeat
 	else:
 		check_send_heartbeat(clock)
-
 
 
