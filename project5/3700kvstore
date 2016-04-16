@@ -159,6 +159,8 @@ def send_request_vote_rpcs(destination):
 	sock.send(json.dumps(msg))
 
 # Send out append entries rpc
+# Takes in the the entries index
+# and the follower(s) to send it to
 def send_append_entries_rpc(entry_index, destination):
 	global my_id
 	global current_term
@@ -167,6 +169,11 @@ def send_append_entries_rpc(entry_index, destination):
 	global commit_index
 	global last_sent_rpc
 
+	# Get the approriate entry based on the entry index
+	# if it is -1, it means it is a heartbeat so send
+	# nothing, otherwise get the entry at log[entry_index - 1]
+	# need to subtract 1 when getting the entry out of the log
+	# since the list starts at index 0
 	if entry_index == -1:
 		entry = ''
 	else:
@@ -175,17 +182,20 @@ def send_append_entries_rpc(entry_index, destination):
 	if not entry == '':
 		print "SENDING APPEND ENTRY"
 	
+	# Get the last index and term
 	last_index = entry_index - 1
 	if (entry_index - 1 > 0):
 		last_term = log[last_index]['term']
 	else:
 		last_term = 0
 	
+	# setup the message
 	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index, 'last_index': last_index, 'last_term': last_term}
 
 	# update
 	last_sent_rpc = time.time()
 
+	# send the message
 	sock.send(json.dumps(msg))
 
 # If a message of type request_vote is
@@ -286,11 +296,18 @@ def handle_append_entries_messages(msg):
 		# If they do not match up with our log, send back
 		# an error message that includes our last term and index
 		else:
-			print "deal with later" 
-			#print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+			print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+			
+			# If our last index is greater than or equal to 
+			# the last index sent from the leader, remove the
+			# unmatching entry/entries
+			while len(log) >= msg['last_index']:
+				print "REMOVING ENTRIES FROM FOLLOWER LOG"
+				del log[-1]
+			
+			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure'}
+			sock.send(json.dumps(response))				
 
-			#response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'fail', 'last_index': last_index, 'last_term': last_term}
-				
 	# if we are the leader and this is a
 	# response to an append_entries we sent
 	elif msg['term'] == current_term and state == "leader" and msg['leader'] == my_id:
@@ -317,6 +334,14 @@ def handle_append_entries_messages(msg):
 				if num_replica_logs >= majority:
 					print "ENTRY ADDED TO MAJORITY OF FOLLOWER LOGS"
 					apply_command()
+		elif msg['status'] == 'consistency_failure':
+			# Get the follower and decrement their next index
+			follower = msg['src']
+			follower_next_index[follower] = follower_next_index[follower] - 1
+								
+			# Send an append entry with the appropriate entry attached
+			print "SENDING APPEND ENTRY TO RESOLVE FAILURE"
+			send_append_entries_rpc(follower_next_index[follower], follower)
 			
 # If we are a follower, check to see if we
 # should commit anything to our state machine
