@@ -2,9 +2,11 @@
 
 import sys, socket, select, time, json, random, math, collections
 
-# Amount of time to wait to send
-# a heartbeat
+# Amount of time to wait to send a heartbeat
 HEARTBEAT_TIME = .125
+
+# Timeout for an append entry request to be re-sent
+APPEND_ENTRY_TIMEOUT = .1
 
 # Respond to a client's message
 def handle_client_message(msgtype, mid, client_address, msg):
@@ -17,7 +19,7 @@ def handle_client_message(msgtype, mid, client_address, msg):
 
 	# If we are not the leader, send a redirect message
 	if not (state == "leader"):
-		#print "SENDING REDIRECT " + current_leader
+		print "SENDING REDIRECT " + current_leader
 		msg = {'src': my_id, 'dst': client_address, 'leader': current_leader, 'type': 'redirect', 'MID': mid}
 		sock.send(json.dumps(msg))
 	# If we are the leader, deal with the user's message
@@ -58,7 +60,7 @@ def handle_queue_command():
 			# If we have seen it, remove it from queue
 			# and go to next command
 			if 'MID' in l and l['MID'] == entry['MID']:
-				print "ALREADY HAVE THIS IN LOG"
+				#print "ALREADY HAVE THIS IN LOG"
 				del command_queue[0]	
 				handle_queue_command()
 				return
@@ -68,7 +70,11 @@ def handle_queue_command():
 	
 		# Send append entries rpcs to all other
 		# replicas in parallel
-		send_append_entries_rpc(len(log), 'FFFF')
+		#for r in replica_ids:
+		#	if follower_next_index[r] == len(log):
+		#		send_append_entries_rpc(len(log), r, False)
+
+		send_append_entries_rpc(len(log), 'FFFF', False)
 
 # The leader initializes the next index
 # for each follower to be its own last
@@ -83,7 +89,19 @@ def initialize_follower_index():
 
 	for r in replica_ids:
 		follower_next_index[r] = index + 1
-
+		
+# The leader must keep track of a timeout
+# for each of the append entries it sends out
+# to the followers, do this by keeping track
+# of the time of when the message was sent out
+# will be initialized to -1
+def initialize_append_entry_timeout():
+	global replica_ids
+	global append_entries_timeout_tracker
+	
+	for r in replica_ids:
+		append_entries_timeout_tracker[r] = -1
+	 
 # Get a random number for the election
 # timeout
 def get_election_timeout():
@@ -109,8 +127,21 @@ def check_send_heartbeat(current_time):
 	global log
 
 	if current_time - last_sent_rpc >= HEARTBEAT_TIME:
-		send_append_entries_rpc(-1, 'FFFF')
+		send_append_entries_rpc(-1, 'FFFF', False)
 
+# Check to see if we need to resend an append entry
+# to one of the followers
+def check_append_entry_timeout(current_time):
+	global replica_ids
+	global append_entries_timeout_tracker
+	global follower_next_index
+	
+	# If a timeout occurs, resend
+	for r in replica_ids:
+		if (not append_entries_timeout_tracker[r] == -1) and current_time - append_entries_timeout_tracker[r] >= APPEND_ENTRY_TIMEOUT:
+			print "RESENDING APPEND ENTRY DUE TO TIMEOUT"
+			send_append_entries_rpc(follower_next_index[r], r, True)	
+	
 # Begin an election
 def begin_election():
 	global my_id
@@ -161,13 +192,14 @@ def send_request_vote_rpcs(destination):
 # Send out append entries rpc
 # Takes in the the entries index
 # and the follower(s) to send it to
-def send_append_entries_rpc(entry_index, destination):
+def send_append_entries_rpc(entry_index, destination, resend):
 	global my_id
 	global current_term
 	global sock
 	global log
 	global commit_index
 	global last_sent_rpc
+	global append_entries_timeout_tracker
 
 	# Get the approriate entry based on the entry index
 	# if it is -1, it means it is a heartbeat so send
@@ -184,13 +216,23 @@ def send_append_entries_rpc(entry_index, destination):
 	
 	# Get the last index and term
 	last_index = entry_index - 1
-	if (entry_index - 1 > 0):
+	if (last_index > 0):
 		last_term = log[last_index]['term']
 	else:
 		last_term = 0
 	
 	# setup the message
 	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index, 'last_index': last_index, 'last_term': last_term}
+
+	if resend:
+		msg['resent'] = True
+
+	# update the append_entries_timeout list
+	if not entry == '' and not destination == 'FFFF':
+		append_entries_timeout_tracker[destination] = time.time()
+	elif not entry == '':
+		for r in replica_ids:
+			append_entries_timeout_tracker[r] = time.time()
 
 	# update
 	last_sent_rpc = time.time()
@@ -217,7 +259,7 @@ def handle_request_vote_messages(msg):
 
 	# if this is a response to our election
 	if 'vote_granted' in msg and state == "candidate":
-		print "RECEIVED A VOTE FROM " + msg['src']
+		#print "RECEIVED A VOTE FROM " + msg['src']
 
 		# check the answer, only do something if yes
 		if msg['vote_granted'] == 'yes' and msg['term'] == current_term and msg['leader'] == my_id:
@@ -227,16 +269,18 @@ def handle_request_vote_messages(msg):
 			# send out append entry messages to everyone
 			# also setup follower next index dictionary
 			if num_votes >=  majority:
-				print "BECOMING LEADER " + current_leader
+				#print "BECOMING LEADER " + current_leader
 				state = "leader"
 				initialize_follower_index()
-				send_append_entries_rpc(-1, 'FFFF')							
+				initialize_append_entry_timeout()
+				send_append_entries_rpc(-1, 'FFFF', False)
+											
 	# if this is a message from a candidate
 	else:
 		# if the candidate's term number is higher
 		# than ours, or if it is equal and we have not voted
 		if msg['term'] > current_term or (msg['term'] == current_term and voted_for == None):
-			print "sending vote yes"
+			#print "sending vote yes"
 			current_term = msg['term']
 			current_leader = msg['leader']
 			voted_for = msg['src']
@@ -290,11 +334,28 @@ def handle_append_entries_messages(msg):
 		if msg['entries'] == '': 	
 			check_to_commit(leader_commit)
 
+		# if this message is being resent to us because
+		# of a timeout
+		elif 'resent' in msg and msg['resent'] == True:
+			# check to see if we have already added to log
+			if not msg['entries'] in log:
+				# append entry to log
+				print "ADDING ENTRY TO LOG BECAUSE NOT ADDED BEFORE"
+                        	log.append(msg['entries'])
+
+                        # send back message of success
+                        response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
+                        sock.send(json.dumps(response))
+
+                        # check if we need to commit anything
+                        # to state machine
+                        check_to_commit(leader_commit)
+
 		# if entries it not empty, check if our last term/last 
 		# index match up with the leader's
 		elif (msg['last_index'] == last_index and msg['last_term'] == last_term):
 			# if we need to add something to the log
-			#print "APPEND ENTRY TO FOLLOWER LOG"
+			#print "APPEND ENTRY TO FOLLOWER LOG " + str(my_id) + " " + str(msg['last_index'])
 					
 			# append entry to log
 			log.append(msg['entries'])
@@ -310,25 +371,31 @@ def handle_append_entries_messages(msg):
 		# If they do not match up with our log, send back
 		# an error message that includes our last term and index
 		else:
-			print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
-			
-			# If our last index is greater than or equal to 
-			# the last index sent from the leader, remove the
-			# unmatching entry/entries
-			while len(log) >= msg['last_index']:
-				print "REMOVING ENTRIES FROM FOLLOWER LOG"
-				del log[-1]
-			
-			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure'}
-			sock.send(json.dumps(response))				
+			if msg['entries'] in log and msg['last_index'] == log.index(msg['entries']):
+				print "REPEAT DO NOTHING"
+			else:
+				print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+	
+				# If our last index is greater than or equal to 
+				# the last index sent from the leader, remove the
+				# unmatching entry/entries
+				while last_index > msg['last_index']:
+					print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg['last_index'])
+					del log[-1]
+				
+				response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure', 'last_index':last_index, 'last_term':last_term}
+				sock.send(json.dumps(response))				
 
 	# if we are the leader and this is a
 	# response to an append_entries we sent
 	elif msg['term'] == current_term and state == "leader" and msg['leader'] == my_id:
+		# Update the timeout tracker for append entry
+		append_entries_timeout_tracker[msg['src']] = -1
+
 		# if the entry we are dealing with now
 		# was successfully added to the replica's log
 		if msg['status'] == 'success':
-			#print "ENTRY SUCCCESSFULLY ADDED TO FOLLOWER LOG"
+			#print "ENTRY SUCCCESSFULLY ADDED TO FOLLOWER LOG " + msg['src'] + " " + str(follower_next_index[msg['src']])
 
 			# update the next index of the follower
 			follower = msg['src']
@@ -337,9 +404,10 @@ def handle_append_entries_messages(msg):
 			# Check to see if we need to send more append entries
 			# messages to the follower to catch them up to our log
 			#print str(follower_next_index[follower]) + " " + str(commit_index)
-			if follower_next_index[follower] < (commit_index + 1):
+			if follower_next_index[follower] < commit_index:
+				#print str(follower_next_index[follower]) + " " + str(commit_index)
 				print "NEED TO SEND MORE TO FOLLOWER"
-				send_append_entries_rpc(follower_next_index[follower], follower)
+				send_append_entries_rpc(follower_next_index[follower], follower, False)
 			
 			# check if we have already committed this on our state
 			# machine or not, if we have then ignore it
@@ -356,13 +424,33 @@ def handle_append_entries_messages(msg):
 					#print "ENTRY ADDED TO MAJORITY OF FOLLOWER LOGS"
 					apply_command()
 		elif msg['status'] == 'consistency_failure':
-			# Get the follower and decrement their next index
+			# Get the follower's last index and term
+			follower_last_index = msg['last_index']
+			follower_last_term = msg['last_term']
+
+			# Get what we have stored for the follower's
+			# next index to see if we need to decrement
 			follower = msg['src']
-			follower_next_index[follower] = follower_next_index[follower] - 1
+			follower_next_entry_index = follower_next_index[follower]
+
+			# Get what we have stored as the follower's last index
+			# and last term
+			leader_version_follower_last_index = follower_next_entry_index - 1
+			
+			if leader_version_follower_last_index - 1 <= 0:
+				leader_version_follower_last_term = 0
+			else:
+				leader_version_follower_last_term = log[leader_version_follower_last_index - 1]['term']
+
+			# If what we have as the follower's last term and index is
+			# correct, then do not decrement, otherwise decrement the
+			# follower's next index by 1
+			if not leader_version_follower_last_term == follower_last_term and not leader_version_follower_last_index == follower_last_index:
+				follower_next_index[follower] = follower_next_index[follower] - 1
 								
 			# Send an append entry with the appropriate entry attached
-			print "SENDING APPEND ENTRY TO RESOLVE FAILURE"
-			send_append_entries_rpc(follower_next_index[follower], follower)		
+			print "SENDING APPEND ENTRY TO RESOLVE FAILURE " +  str(follower_next_index[follower])
+			send_append_entries_rpc(follower_next_index[follower], follower, False)
 		
 # If we are a follower, check to see if we
 # should commit anything to our state machine
@@ -498,6 +586,11 @@ last_received_rpc = time.time()
 # become the leader
 last_sent_rpc = -1
 
+# Keep track of whether or not the leader
+# should resend an append entries to a follower
+# based on a timeout
+append_entries_timeout_tracker = {}
+
 # Keep track of the replica's term
 # all will start at 0
 current_term = 0
@@ -574,7 +667,10 @@ while True:
 	if not (state == "leader"):
 		check_election_timeout(clock)
 	# Check if we need to send a heartbeat
+	# and if any append entry requests have
+	# timed out and should be re-sent
 	else:
 		check_send_heartbeat(clock)
+		check_append_entry_timeout(clock)
 
 
