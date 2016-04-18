@@ -182,11 +182,15 @@ def send_request_vote_rpcs(destination):
 	global current_leader
 	global current_term
 	global last_sent_rpc
+	global log 
 
 	#print "SENDING VOTE REQUEST"
 	last_sent_rpc = time.time()
-
-	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'request_vote', 'term': current_term}
+	
+	#send the log length so that we can compare them to the replica's 
+	log_length = len(log)
+ 
+	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'request_vote', 'term': current_term, 'log_length': log_length}
 	sock.send(json.dumps(msg))
 
 # Send out append entries rpc
@@ -277,15 +281,24 @@ def handle_request_vote_messages(msg):
 											
 	# if this is a message from a candidate
 	else:
-		# if the candidate's term number is higher
-		# than ours, or if it is equal and we have not voted
-		if msg['term'] > current_term or (msg['term'] == current_term and voted_for == None):
+		# if the candidate's term number is higher, than the candidate's log is more up-to-date than us -> vote_granted = yes
+		# if the terms are equal, then check the length of the log. 
+			# if the candidate's log is longer than ours, then vote_granted = yes
+			# if the length of our log is longer, deny the vote 
+		if msg['term'] > current_term:
 			#print "sending vote yes"
 			current_term = msg['term']
 			current_leader = msg['leader']
 			voted_for = msg['src']
 			response = {'src': my_id, 'dst': msg['src'], 'leader': msg['leader'], 'type':'request_vote', 'vote_granted':'yes','term': msg['term']}
 			sock.send(json.dumps(response))
+		if msg['term'] == current_term and voted_for == None:
+			if msg['log_length'] > len(log): 
+				current_leader = msg['leader']
+				voted_for = msg['src']
+				response = {'src': my_id, 'dst': msg['src'], 'leader': msg['leader'], 'type':'request_vote', 'vote_granted':'yes','term': msg['term']}
+                        	sock.send(json.dumps(response)) 
+			
 	
 def handle_append_entries_messages(msg):
 	global current_term
