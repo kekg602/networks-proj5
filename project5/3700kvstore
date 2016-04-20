@@ -139,7 +139,7 @@ def check_append_entry_timeout(current_time):
 	# If a timeout occurs, resend
 	for r in replica_ids:
 		if (not append_entries_timeout_tracker[r] == -1) and current_time - append_entries_timeout_tracker[r] >= APPEND_ENTRY_TIMEOUT:
-			print "RESENDING APPEND ENTRY DUE TO TIMEOUT"
+			print "RESENDING APPEND ENTRY DUE TO TIMEOUT to follower " + str(r) + " entry number " + str(follower_next_index[r])
 			send_append_entries_rpc(follower_next_index[r], r, True)	
 	
 # Begin an election
@@ -205,7 +205,7 @@ def send_append_entries_rpc(entry_index, destination, resend):
 	global last_sent_rpc
 	global append_entries_timeout_tracker
 
-	# Get the approriate entry based on the entry index
+	# Get the approriate entry/entries based on the entry index
 	# if it is -1, it means it is a heartbeat so send
 	# nothing, otherwise get the entry at log[entry_index - 1]
 	# need to subtract 1 when getting the entry out of the log
@@ -213,10 +213,13 @@ def send_append_entries_rpc(entry_index, destination, resend):
 	if entry_index == -1:
 		entry = ''
 	else:
-		entry = log[entry_index - 1]
-
-	#if not entry == '':
-		#print "SENDING APPEND ENTRY"
+		# add all of the entries up to the last one in
+		# the leader's log
+		temp = entry_index - 1
+		entry = []
+		while temp < len(log):
+			entry.append(log[temp])
+			temp = temp + 1
 	
 	# Get the last index and term
 	last_index = entry_index - 1
@@ -349,55 +352,84 @@ def handle_append_entries_messages(msg):
 
 		# if this message is being resent to us because
 		# of a timeout
-		elif 'resent' in msg and msg['resent'] == True:
+		#elif 'resent' in msg and msg['resent'] == True:
 			# check to see if we have already added to log
-			if not msg['entries'] in log:
-				# append entry to log
-				print "ADDING ENTRY TO LOG BECAUSE NOT ADDED BEFORE"
-                        	log.append(msg['entries'])
+		#	for m in msg['entries']:
+		#		if not m in log:
+					# append entry to log
+		#			print "ADDING ENTRY TO LOG BECAUSE NOT ADDED BEFORE"
+         #       			log.append(m)
 
-                        # send back message of success
-                        response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
-                        sock.send(json.dumps(response))
+		#	last_index = len(log)
+            # send back message of success
+         #   response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success', 'last_index': last_index}
+          #  sock.send(json.dumps(response))
 
-                        # check if we need to commit anything
-                        # to state machine
-                        check_to_commit(leader_commit)
+            # check if we need to commit anything
+            # to state machine
+           # check_to_commit(leader_commit)
 
-		# if entries it not empty, check if our last term/last 
+		# if entries is not empty, check if our last term/last 
 		# index match up with the leader's
 		elif (msg['last_index'] == last_index and msg['last_term'] == last_term):
 			# if we need to add something to the log
 			#print "APPEND ENTRY TO FOLLOWER LOG " + str(my_id) + " " + str(msg['last_index'])
 					
 			# append entry to log
-			log.append(msg['entries'])
+			log = log + msg['entries']
+			last_index = len(log)
 					
-			# send back message of success
-			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success'}
+			# send back message of success and what our new last_index is
+			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success', 'last_index': last_index}
 			sock.send(json.dumps(response))
 			
 			# check if we need to commit anything
 			# to state machine
 			check_to_commit(leader_commit)
 			
-		# If they do not match up with our log, send back
-		# an error message that includes our last term and index
+		# If they do not match up with our log, see if it was a
+		# resend, if it is then send success otherwise send failure
+		# that includes our last term and index
 		else:
-			if msg['entries'] in log and msg['last_index'] == log.index(msg['entries']):
-				print "REPEAT DO NOTHING"
-			else:
-				print "NEED TO UPDATE FOLLOWER LOG TO MATCH LEADER LOG"
+			msg_last_index = msg['last_index']
+			follower_last_index = len(log)
+			
+			# first go through the entries the leader sent and
+			# see if we already have them b/c this is a resent message
+			# check up to our last entry, if more to add do so and send success
+			for m in msg['entries']:
+				# if we already have this entry, ignore
+				if m in log and msg_last_index == log.index(m):
+					msg_last_index = msg_last_index + 1
+				# if we do not have this entry and it matches up
+				# with the indices of our log, append it
+				elif not m in log and msg_last_index == follower_last_index:
+					print "ADDING IN LATER INDICES"
+					log.append(m)
+					msg_last_index = msg_last_index + 1
+					follower_last_index = follower_last_index + 1
+				# if not in log and the last indices do not match up
+				elif not m in log and not msg_last_index == follower_last_index:
+					print "NEED TO UPDATE MY FOLLOWER LOG TO MATCH LEADER LOG I AM FOLLOWER " + str(my_id) + " my last index is " + str(last_index) + " and the leader's last index is " + str(msg_last_index)
+					#print " index of leader " + str(msg_last_index) + " index of us " + log.index(m)
 	
-				# If our last index is greater than or equal to 
-				# the last index sent from the leader, remove the
-				# unmatching entry/entries
-				while last_index > msg['last_index']:
-					print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg['last_index'])
-					del log[-1]
+					# If our last index is greater than or equal to 
+					# the last index sent from the leader, remove the
+					# unmatching entry/entries
+					while last_index > msg_last_index:
+						print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg_last_index)
+						del log[-1]
 				
-				response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure', 'last_index':last_index, 'last_term':last_term}
-				sock.send(json.dumps(response))				
+					response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure', 'last_index': last_index, 'last_term':last_term}
+					sock.send(json.dumps(response))
+					
+					return;
+					
+			print 'REACHED END OF FOR LOOP'
+			# If we reach here, then send success
+			last_index = len(log)
+			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success', 'last_index': last_index, 'last_term':last_term}
+			sock.send(json.dumps(response))
 
 	# if we are the leader and this is a
 	# response to an append_entries we sent
@@ -408,11 +440,11 @@ def handle_append_entries_messages(msg):
 		# if the entry we are dealing with now
 		# was successfully added to the replica's log
 		if msg['status'] == 'success':
-			#print "ENTRY SUCCCESSFULLY ADDED TO FOLLOWER LOG " + msg['src'] + " " + str(follower_next_index[msg['src']])
-
+			follower_last_index = msg['last_index']
+			
 			# update the next index of the follower
 			follower = msg['src']
-			follower_next_index[follower] = follower_next_index[follower] + 1
+			follower_next_index[follower] = follower_last_index + 1
 
 			# Check to see if we need to send more append entries
 			# messages to the follower to catch them up to our log
@@ -461,8 +493,8 @@ def handle_append_entries_messages(msg):
 			if not leader_version_follower_last_term == follower_last_term and not leader_version_follower_last_index == follower_last_index:
 				follower_next_index[follower] = follower_next_index[follower] - 1
 								
-			# Send an append entry with the appropriate entry attached
-			print "SENDING APPEND ENTRY TO RESOLVE FAILURE " +  str(follower_next_index[follower])
+			# Send an append entry with the appropriate entry or entries attached
+			print "SENDING APPEND ENTRY TO RESOLVE FAILURE " +  str(follower) + " " + str(follower_next_index[follower])
 			send_append_entries_rpc(follower_next_index[follower], follower, False)
 		
 # If we are a follower, check to see if we
