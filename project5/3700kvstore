@@ -108,7 +108,7 @@ def initialize_append_entry_timeout():
 # Get a random number for the election
 # timeout
 def get_election_timeout():
-	i = random.randint(150, 300)
+	i = random.randint(250, 500)
 	
 	# want the number to be in ms so
 	# divide by 100
@@ -155,7 +155,7 @@ def begin_election():
 	global current_leader
 	global last_received_rpc
 
-	#print "Election started by " + my_id
+	print "Election started by " + my_id
 
 	# increment term by 1
 	current_term = current_term + 1
@@ -220,7 +220,7 @@ def send_append_entries_rpc(entry_index, destination):
 		# the leader's log
 		temp = entry_index - 1
 		entry = []
-		while temp < len(log):
+		while temp < len(log) and (temp - entry_index - 1) < 50:
 			entry.append(log[temp])
 			temp = temp + 1
 	
@@ -416,7 +416,7 @@ def handle_append_entries_messages(msg):
 					# If our last index is greater than or equal to 
 					# the last index sent from the leader, remove the
 					# unmatching entry/entries
-					while last_index > msg_last_index:
+					while len(log) > msg_last_index:
 						print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg_last_index)
 						del log[-1]
 				
