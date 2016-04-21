@@ -44,6 +44,7 @@ def handle_client_message(msgtype, mid, client_address, msg):
 def handle_queue_command():
 	global command_queue
 	global log
+	global num_replica_logs
 
 	# Make sure there are items in the queue
 	if len(command_queue) >= 1:
@@ -67,6 +68,8 @@ def handle_queue_command():
 
 		#print "ADD ENTRY TO LEADER LOG"
 		log.append(entry)
+
+		num_replica_logs = 1
 	
 		# Send append entries rpcs to all other
 		# replicas in parallel
@@ -74,7 +77,7 @@ def handle_queue_command():
 		#	if follower_next_index[r] == len(log):
 		#		send_append_entries_rpc(len(log), r, False)
 
-		send_append_entries_rpc(len(log), 'FFFF', False)
+		send_append_entries_rpc(len(log), 'FFFF')
 
 # The leader initializes the next index
 # for each follower to be its own last
@@ -127,7 +130,7 @@ def check_send_heartbeat(current_time):
 	global log
 
 	if current_time - last_sent_rpc >= HEARTBEAT_TIME:
-		send_append_entries_rpc(-1, 'FFFF', False)
+		send_append_entries_rpc(-1, 'FFFF')
 
 # Check to see if we need to resend an append entry
 # to one of the followers
@@ -140,7 +143,7 @@ def check_append_entry_timeout(current_time):
 	for r in replica_ids:
 		if (not append_entries_timeout_tracker[r] == -1) and current_time - append_entries_timeout_tracker[r] >= APPEND_ENTRY_TIMEOUT:
 			print "RESENDING APPEND ENTRY DUE TO TIMEOUT to follower " + str(r) + " entry number " + str(follower_next_index[r])
-			send_append_entries_rpc(follower_next_index[r], r, True)	
+			send_append_entries_rpc(follower_next_index[r], r)	
 	
 # Begin an election
 def begin_election():
@@ -196,7 +199,7 @@ def send_request_vote_rpcs(destination):
 # Send out append entries rpc
 # Takes in the the entries index
 # and the follower(s) to send it to
-def send_append_entries_rpc(entry_index, destination, resend):
+def send_append_entries_rpc(entry_index, destination):
 	global my_id
 	global current_term
 	global sock
@@ -230,9 +233,6 @@ def send_append_entries_rpc(entry_index, destination, resend):
 	
 	# setup the message
 	msg = {'src': my_id, 'dst': destination, 'leader': my_id, 'type': 'append_entries', 'term': current_term, 'entries': entry, 'commit_index': commit_index, 'last_index': last_index, 'last_term': last_term}
-
-	if resend:
-		msg['resent'] = True
 
 	# update the append_entries_timeout list
 	if not entry == '' and not destination == 'FFFF':
@@ -280,7 +280,7 @@ def handle_request_vote_messages(msg):
 				state = "leader"
 				initialize_follower_index()
 				initialize_append_entry_timeout()
-				send_append_entries_rpc(-1, 'FFFF', False)
+				send_append_entries_rpc(-1, 'FFFF')
 											
 	# if this is a message from a candidate
 	else:
@@ -452,7 +452,7 @@ def handle_append_entries_messages(msg):
 			if follower_next_index[follower] < commit_index:
 				#print str(follower_next_index[follower]) + " " + str(commit_index)
 				print "NEED TO SEND MORE TO FOLLOWER"
-				send_append_entries_rpc(follower_next_index[follower], follower, False)
+				send_append_entries_rpc(follower_next_index[follower], follower)
 			
 			# check if we have already committed this on our state
 			# machine or not, if we have then ignore it
@@ -495,7 +495,7 @@ def handle_append_entries_messages(msg):
 								
 			# Send an append entry with the appropriate entry or entries attached
 			print "SENDING APPEND ENTRY TO RESOLVE FAILURE " +  str(follower) + " " + str(follower_next_index[follower])
-			send_append_entries_rpc(follower_next_index[follower], follower, False)
+			send_append_entries_rpc(follower_next_index[follower], follower)
 		
 # If we are a follower, check to see if we
 # should commit anything to our state machine
@@ -722,5 +722,8 @@ while True:
 		else:
 			check_send_heartbeat(clock)
 			check_append_entry_timeout(clock)
+
+
+
 
 
