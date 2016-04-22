@@ -3,7 +3,7 @@
 import sys, socket, select, time, json, random, math, collections
 
 # Amount of time to wait to send a heartbeat
-HEARTBEAT_TIME = .125
+HEARTBEAT_TIME = .1
 
 # Timeout for an append entry request to be re-sent
 APPEND_ENTRY_TIMEOUT = .1
@@ -122,6 +122,7 @@ def check_election_timeout(current_time):
 
 	# if a timeout has occurred, begin an election
 	if current_time - last_received_rpc >= election_timeout:
+		print "election timeout"
 		begin_election()
 
 # Check to see if the rpc timeout has occurred
@@ -263,6 +264,7 @@ def handle_request_vote_messages(msg):
 	global state
 	global my_id
 	global log
+	global command_queue
 
 	# if this is a response to our election
 	if 'vote_granted' in msg and state == "candidate":
@@ -276,11 +278,13 @@ def handle_request_vote_messages(msg):
 			# send out append entry messages to everyone
 			# also setup follower next index dictionary
 			if num_votes >=  majority:
-				#print "BECOMING LEADER " + current_leader
+				print "BECOMING LEADER " + current_leader
 				state = "leader"
 				initialize_follower_index()
 				initialize_append_entry_timeout()
 				send_append_entries_rpc(-1, 'FFFF')
+				command_queue = []
+				handle_queue_command()
 											
 	# if this is a message from a candidate
 	else:
@@ -400,6 +404,7 @@ def handle_append_entries_messages(msg):
 			for m in msg['entries']:
 				# if we already have this entry, ignore
 				if m in log and msg_last_index == log.index(m):
+					print "repeat"
 					msg_last_index = msg_last_index + 1
 				# if we do not have this entry and it matches up
 				# with the indices of our log, append it
@@ -416,7 +421,7 @@ def handle_append_entries_messages(msg):
 					# If our last index is greater than or equal to 
 					# the last index sent from the leader, remove the
 					# unmatching entry/entries
-					while len(log) > msg_last_index:
+					while len(log) > msg_last_index and len(log) > 0:
 						print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg_last_index)
 						del log[-1]
 				
