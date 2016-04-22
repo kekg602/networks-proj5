@@ -16,10 +16,11 @@ def handle_client_message(msgtype, mid, client_address, msg):
 	global current_leader
 	global command_queue
 	global current_term
+	global log
 
 	# If we are not the leader, send a redirect message
 	if not (state == "leader"):
-		print "SENDING REDIRECT " + current_leader
+		#print "SENDING REDIRECT " + current_leader
 		msg = {'src': my_id, 'dst': client_address, 'leader': current_leader, 'type': 'redirect', 'MID': mid}
 		sock.send(json.dumps(msg))
 	# If we are the leader, deal with the user's message
@@ -71,12 +72,6 @@ def handle_queue_command():
 
 		num_replica_logs = 1
 	
-		# Send append entries rpcs to all other
-		# replicas in parallel
-		#for r in replica_ids:
-		#	if follower_next_index[r] == len(log):
-		#		send_append_entries_rpc(len(log), r, False)
-
 		send_append_entries_rpc(len(log), 'FFFF')
 
 # The leader initializes the next index
@@ -265,6 +260,8 @@ def handle_request_vote_messages(msg):
 	global my_id
 	global log
 	global command_queue
+	global commit_index
+	global commit_queue
 
 	# if this is a response to our election
 	if 'vote_granted' in msg and state == "candidate":
@@ -284,6 +281,11 @@ def handle_request_vote_messages(msg):
 				initialize_append_entry_timeout()
 				send_append_entries_rpc(-1, 'FFFF')
 				command_queue = []
+				
+				while commit_index < len(log):
+					commit_queue.append(log[commit_index - 1])
+					commit_index = commit_index + 1
+					
 				handle_queue_command()
 											
 	# if this is a message from a candidate
@@ -353,25 +355,6 @@ def handle_append_entries_messages(msg):
 		# we need to commit anything to state machine 
 		if msg['entries'] == '': 	
 			check_to_commit(leader_commit)
-
-		# if this message is being resent to us because
-		# of a timeout
-		#elif 'resent' in msg and msg['resent'] == True:
-			# check to see if we have already added to log
-		#	for m in msg['entries']:
-		#		if not m in log:
-					# append entry to log
-		#			print "ADDING ENTRY TO LOG BECAUSE NOT ADDED BEFORE"
-         #       			log.append(m)
-
-		#	last_index = len(log)
-            # send back message of success
-         #   response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success', 'last_index': last_index}
-          #  sock.send(json.dumps(response))
-
-            # check if we need to commit anything
-            # to state machine
-           # check_to_commit(leader_commit)
 
 		# if entries is not empty, check if our last term/last 
 		# index match up with the leader's
@@ -445,6 +428,8 @@ def handle_append_entries_messages(msg):
 		# if the entry we are dealing with now
 		# was successfully added to the replica's log
 		if msg['status'] == 'success':
+			#print "entry successfully added to replica " + str(msg['src']) + " " + str(msg['last_index'])
+
 			follower_last_index = msg['last_index']
 			
 			# update the next index of the follower
@@ -461,7 +446,9 @@ def handle_append_entries_messages(msg):
 			
 			# check if we have already committed this on our state
 			# machine or not, if we have then ignore it
+			print str(follower_next_index[follower]) + " " + str(commit_index)
 			if follower_next_index[follower] - 1 == commit_index + 1:
+				print "got it"
 				# add one to the counter and see if the
 				# majority has added it to their logs
 				num_replica_logs = num_replica_logs + 1
@@ -525,9 +512,21 @@ def apply_command():
 	global command_queue
 	global num_replica_logs
 	global state
+	global commit_queue
 
 	#print "APPLYING COMMAND TO STATE MACHINE"
 	
+	while len(commit_queue) > 0:
+		print "applying old commit"
+		command = commit_queue[0]
+
+		if command['type'] == 'get':
+			handle_get_command(command)
+		else:
+			handle_put_command(command)
+
+		del commit_queue[0]
+
 	# Get the correct log entry
 	command = log[commit_index]
 	
@@ -676,6 +675,8 @@ num_replica_logs = 0
 # replicas know when it is okay to 
 # commit a command to their state machines
 commit_index = 0
+
+commit_queue = []
 
 # Keep track of a next index for each
 # of the other replicas - used when we are
