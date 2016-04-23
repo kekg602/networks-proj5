@@ -117,7 +117,6 @@ def check_election_timeout(current_time):
 
 	# if a timeout has occurred, begin an election
 	if current_time - last_received_rpc >= election_timeout:
-		print "election timeout"
 		begin_election()
 
 # Check to see if the rpc timeout has occurred
@@ -138,7 +137,7 @@ def check_append_entry_timeout(current_time):
 	# If a timeout occurs, resend
 	for r in replica_ids:
 		if (not append_entries_timeout_tracker[r] == -1) and current_time - append_entries_timeout_tracker[r] >= APPEND_ENTRY_TIMEOUT:
-			print "RESENDING APPEND ENTRY DUE TO TIMEOUT to follower " + str(r) + " entry number " + str(follower_next_index[r])
+			#print "RESENDING APPEND ENTRY DUE TO TIMEOUT to follower " + str(r) + " entry number " + str(follower_next_index[r])
 			send_append_entries_rpc(follower_next_index[r], r)	
 	
 # Begin an election
@@ -151,7 +150,7 @@ def begin_election():
 	global current_leader
 	global last_received_rpc
 
-	print "Election started by " + my_id
+	#print "Election started by " + my_id
 
 	# increment term by 1
 	current_term = current_term + 1
@@ -275,13 +274,15 @@ def handle_request_vote_messages(msg):
 			# send out append entry messages to everyone
 			# also setup follower next index dictionary
 			if num_votes >=  majority:
-				print "BECOMING LEADER " + current_leader
+				#print "BECOMING LEADER " + current_leader
 				state = "leader"
 				initialize_follower_index()
 				initialize_append_entry_timeout()
 				send_append_entries_rpc(-1, 'FFFF')
 				command_queue = []
 				
+				# Update the commit index to length of log
+				# and keep track of past log entries to commit later
 				while commit_index < len(log):
 					commit_queue.append(log[commit_index - 1])
 					commit_index = commit_index + 1
@@ -387,25 +388,20 @@ def handle_append_entries_messages(msg):
 			for m in msg['entries']:
 				# if we already have this entry, ignore
 				if m in log and msg_last_index == log.index(m):
-					print "repeat"
 					msg_last_index = msg_last_index + 1
 				# if we do not have this entry and it matches up
 				# with the indices of our log, append it
 				elif not m in log and msg_last_index == follower_last_index:
-					print "ADDING IN LATER INDICES"
 					log.append(m)
 					msg_last_index = msg_last_index + 1
 					follower_last_index = follower_last_index + 1
 				# if not in log and the last indices do not match up
 				elif not m in log and not msg_last_index == follower_last_index:
-					print "NEED TO UPDATE MY FOLLOWER LOG TO MATCH LEADER LOG I AM FOLLOWER " + str(my_id) + " my last index is " + str(last_index) + " and the leader's last index is " + str(msg_last_index)
-					#print " index of leader " + str(msg_last_index) + " index of us " + log.index(m)
-	
 					# If our last index is greater than or equal to 
 					# the last index sent from the leader, remove the
 					# unmatching entry/entries
 					while len(log) > msg_last_index and len(log) > 0:
-						print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg_last_index)
+						#print "REMOVING ENTRIES FROM FOLLOWER LOG " + str(len(log)) + " " + my_id + " " + str(msg_last_index)
 						del log[-1]
 				
 					response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'consistency_failure', 'last_index': last_index, 'last_term':last_term}
@@ -413,7 +409,7 @@ def handle_append_entries_messages(msg):
 					
 					return;
 					
-			print 'REACHED END OF FOR LOOP'
+			#print 'REACHED END OF FOR LOOP'
 			# If we reach here, then send success
 			last_index = len(log)
 			response = {'src': my_id, 'dst': msg['src'], 'leader': current_leader, 'type': 'append_entries', 'term': current_term, 'status': 'success', 'last_index': last_index, 'last_term':last_term}
@@ -441,14 +437,12 @@ def handle_append_entries_messages(msg):
 			#print str(follower_next_index[follower]) + " " + str(commit_index)
 			if follower_next_index[follower] < commit_index:
 				#print str(follower_next_index[follower]) + " " + str(commit_index)
-				print "NEED TO SEND MORE TO FOLLOWER"
+				#print "NEED TO SEND MORE TO FOLLOWER"
 				send_append_entries_rpc(follower_next_index[follower], follower)
 			
 			# check if we have already committed this on our state
 			# machine or not, if we have then ignore it
-			print str(follower_next_index[follower]) + " " + str(commit_index)
 			if follower_next_index[follower] - 1 == commit_index + 1:
-				print "got it"
 				# add one to the counter and see if the
 				# majority has added it to their logs
 				num_replica_logs = num_replica_logs + 1
@@ -486,7 +480,7 @@ def handle_append_entries_messages(msg):
 				follower_next_index[follower] = follower_next_index[follower] - 1
 								
 			# Send an append entry with the appropriate entry or entries attached
-			print "SENDING APPEND ENTRY TO RESOLVE FAILURE " +  str(follower) + " " + str(follower_next_index[follower])
+			#print "SENDING APPEND ENTRY TO RESOLVE FAILURE " +  str(follower) + " " + str(follower_next_index[follower])
 			send_append_entries_rpc(follower_next_index[follower], follower)
 		
 # If we are a follower, check to see if we
@@ -517,7 +511,7 @@ def apply_command():
 	#print "APPLYING COMMAND TO STATE MACHINE"
 	
 	while len(commit_queue) > 0:
-		print "applying old commit"
+		#print "applying old commit"
 		command = commit_queue[0]
 
 		if command['type'] == 'get':
@@ -676,6 +670,9 @@ num_replica_logs = 0
 # commit a command to their state machines
 commit_index = 0
 
+# Keep track of entries in the log that
+# were not committed yet and need to be
+# when a leader changes
 commit_queue = []
 
 # Keep track of a next index for each
